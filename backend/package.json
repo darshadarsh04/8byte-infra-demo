@@ -1,0 +1,15 @@
+{
+  "name": "8bytes-demo-backend",
+  "version": "1.0.0",
+  "description": "Taskboard API - backend tier for the 8bytes-demo three-tier stack (Express + Postgres)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/health.test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.11.5",
+    "prom-client": "^15.1.0"
+  }
+}

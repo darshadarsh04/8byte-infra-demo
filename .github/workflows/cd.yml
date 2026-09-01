@@ -1,0 +1,195 @@
+# Deploy pipeline. Branch decides the target:
+#   push to dev  -> deploy STAGING     (automatic)
+#   push to main -> deploy PRODUCTION  (gated by a required reviewer on the
+#                                       `production` GitHub Environment)
+#
+# One build job produces the frontend + backend images; whichever deploy job
+# matches the branch runs `terraform apply` for that environment and rolls the
+# ECS services onto the new images.
+name: CD
+
+on:
+  push:
+    branches: [dev, main]
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: 8bytes-demo
+
+permissions:
+  id-token: write # OIDC -> AWS, no long-lived keys in the repo
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build, scan, push images
+    runs-on: ubuntu-latest
+    outputs:
+      frontend_uri: ${{ steps.out.outputs.frontend_uri }}
+      backend_uri: ${{ steps.out.outputs.backend_uri }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          docker build -t "$REGISTRY/${PROJECT_NAME}-backend:${{ github.sha }}" backend/
+          docker build -t "$REGISTRY/${PROJECT_NAME}-frontend:${{ github.sha }}" frontend/
+
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: '${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-backend:${{ github.sha }}'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: '${{ steps.ecr.outputs.registry }}/${{ env.PROJECT_NAME }}-frontend:${{ github.sha }}'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Push images
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          docker push "$REGISTRY/${PROJECT_NAME}-backend:${{ github.sha }}"
+          docker push "$REGISTRY/${PROJECT_NAME}-frontend:${{ github.sha }}"
+
+      - name: Export image URIs
+        id: out
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          echo "backend_uri=$REGISTRY/${PROJECT_NAME}-backend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "frontend_uri=$REGISTRY/${PROJECT_NAME}-frontend:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {"text": "CD build/scan failed on ${{ github.ref_name }} @ ${{ github.sha }} - <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|logs>"}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # ---------- STAGING (push to dev) ----------
+  deploy-staging:
+    name: Deploy to staging
+    if: github.ref == 'refs/heads/dev'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: staging # no required reviewer - deploys automatically
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.0'
+
+      - name: Terraform apply (staging)
+        working-directory: terraform/environments/staging
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          terraform init \
+            -backend-config="bucket=${PROJECT_NAME}-tfstate-${ACCOUNT_ID}" \
+            -backend-config="dynamodb_table=${PROJECT_NAME}-tfstate-lock"
+          terraform apply -auto-approve \
+            -var="frontend_image=${{ needs.build-and-push.outputs.frontend_uri }}" \
+            -var="backend_image=${{ needs.build-and-push.outputs.backend_uri }}"
+
+      - name: Roll services onto the new images
+        run: |
+          for svc in frontend backend; do
+            aws ecs update-service \
+              --cluster ${PROJECT_NAME}-staging \
+              --service ${PROJECT_NAME}-staging-$svc \
+              --force-new-deployment
+          done
+
+      - name: Wait for services to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${PROJECT_NAME}-staging \
+            --services ${PROJECT_NAME}-staging-frontend ${PROJECT_NAME}-staging-backend
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {"text": "Staging deploy failed @ ${{ github.sha }} - <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|logs>"}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # ---------- PRODUCTION (push to main) ----------
+  deploy-production:
+    name: Deploy to production
+    if: github.ref == 'refs/heads/main'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    # The `production` Environment has a required reviewer configured under
+    # repo Settings -> Environments -> production. THAT is the manual approval
+    # gate; this job just references the environment name.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.0'
+
+      - name: Terraform apply (production)
+        working-directory: terraform/environments/production
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          terraform init \
+            -backend-config="bucket=${PROJECT_NAME}-tfstate-${ACCOUNT_ID}" \
+            -backend-config="dynamodb_table=${PROJECT_NAME}-tfstate-lock"
+          terraform apply -auto-approve \
+            -var="frontend_image=${{ needs.build-and-push.outputs.frontend_uri }}" \
+            -var="backend_image=${{ needs.build-and-push.outputs.backend_uri }}"
+
+      - name: Roll services onto the new images
+        run: |
+          for svc in frontend backend; do
+            aws ecs update-service \
+              --cluster ${PROJECT_NAME}-production \
+              --service ${PROJECT_NAME}-production-$svc \
+              --force-new-deployment
+          done
+
+      - name: Wait for services to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${PROJECT_NAME}-production \
+            --services ${PROJECT_NAME}-production-frontend ${PROJECT_NAME}-production-backend
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {"text": "PRODUCTION deploy failed @ ${{ github.sha }} - <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|logs>"}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

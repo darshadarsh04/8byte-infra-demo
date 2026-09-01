@@ -1,0 +1,110 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0, "y": 0, "width": 24, "height": 1,
+      "properties": { "markdown": "## Infrastructure - ECS / ALB / RDS resource health" }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 1, "width": 12, "height": 6,
+      "properties": {
+        "title": "ECS Service CPU & Memory Utilization",
+        "view": "timeSeries",
+        "stacked": false,
+        "metrics": [
+          ["AWS/ECS", "CPUUtilization", "ClusterName", "8bytes-demo-production", "ServiceName", "8bytes-demo-production-backend", { "stat": "Average", "label": "CPU %" }],
+          ["AWS/ECS", "MemoryUtilization", "ClusterName", "8bytes-demo-production", "ServiceName", "8bytes-demo-production-backend", { "stat": "Average", "label": "Memory %" }]
+        ],
+        "period": 60,
+        "yAxis": { "left": { "min": 0, "max": 100 } }
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12, "y": 1, "width": 12, "height": 6,
+      "properties": {
+        "title": "ECS Running Task Count (autoscaling in action)",
+        "view": "timeSeries",
+        "metrics": [
+          ["ECS/ContainerInsights", "RunningTaskCount", "ClusterName", "8bytes-demo-production", "ServiceName", "8bytes-demo-production-backend", { "stat": "Average" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 7, "width": 8, "height": 6,
+      "properties": {
+        "title": "ALB Request Count",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", "app/8bytes-demo-production-alb/REPLACE_WITH_ALB_ARN_SUFFIX", { "stat": "Sum" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 7, "width": 8, "height": 6,
+      "properties": {
+        "title": "ALB Target Response Time (p50 / p99)",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "app/8bytes-demo-production-alb/REPLACE_WITH_ALB_ARN_SUFFIX", { "stat": "p50", "label": "p50" }],
+          ["...", { "stat": "p99", "label": "p99" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 7, "width": 8, "height": 6,
+      "properties": {
+        "title": "ALB 4xx / 5xx Counts",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/ApplicationELB", "HTTPCode_Target_4XX_Count", "LoadBalancer", "app/8bytes-demo-production-alb/REPLACE_WITH_ALB_ARN_SUFFIX", { "stat": "Sum", "color": "#ff9896" }],
+          ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "app/8bytes-demo-production-alb/REPLACE_WITH_ALB_ARN_SUFFIX", { "stat": "Sum", "color": "#d62728" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 13, "width": 8, "height": 6,
+      "properties": {
+        "title": "RDS CPU Utilization",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "8bytes-demo-production-db", { "stat": "Average" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 13, "width": 8, "height": 6,
+      "properties": {
+        "title": "RDS Free Storage Space",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", "8bytes-demo-production-db", { "stat": "Average" }]
+        ],
+        "period": 300
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 13, "width": 8, "height": 6,
+      "properties": {
+        "title": "RDS Database Connections",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", "8bytes-demo-production-db", { "stat": "Maximum" }]
+        ],
+        "period": 60
+      }
+    }
+  ]
+}

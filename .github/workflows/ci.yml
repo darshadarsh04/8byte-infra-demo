@@ -1,0 +1,126 @@
+# Runs on every PR into dev or main. Answers "is this change safe to merge" -
+# it never deploys. It does run `terraform plan` against the environment the PR
+# targets so reviewers can see the infra diff before approving. Actual applies
+# live in cd.yml and only run on push (merge).
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+  id-token: write # OIDC -> AWS for the plan job (no long-lived keys)
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: 8bytes-demo
+
+jobs:
+  backend-tests:
+    name: Backend unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  dependency-scan:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan (backend + frontend)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1' # fail on any critical/high with a known fix
+
+  dockerfile-lint:
+    name: Lint Dockerfiles
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dockerfile: [backend/Dockerfile, frontend/Dockerfile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ matrix.dockerfile }}
+          failure-threshold: warning
+
+  terraform-validate:
+    name: Terraform fmt & validate
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: [staging, production]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.0'
+      - name: terraform fmt check
+        run: terraform fmt -check -recursive terraform/
+      - name: terraform validate
+        working-directory: terraform/environments/${{ matrix.environment }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  terraform-plan:
+    name: Terraform plan (target env)
+    needs: terraform-validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # PRs into main plan production; PRs into dev (or anything else) plan staging.
+      - name: Determine target environment
+        id: env
+        run: |
+          if [ "${{ github.base_ref }}" = "main" ]; then
+            echo "name=production" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=staging" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.0'
+
+      - name: Compute backend config
+        id: backend
+        run: |
+          ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          echo "bucket=${PROJECT_NAME}-tfstate-${ACCOUNT_ID}" >> "$GITHUB_OUTPUT"
+          echo "lock=${PROJECT_NAME}-tfstate-lock" >> "$GITHUB_OUTPUT"
+          echo "registry=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform plan
+        working-directory: terraform/environments/${{ steps.env.outputs.name }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ steps.backend.outputs.bucket }}" \
+            -backend-config="dynamodb_table=${{ steps.backend.outputs.lock }}"
+          # image tags here are just placeholders so plan can run - the real
+          # tags are set at deploy time in cd.yml. A plan doesn't pull images.
+          terraform plan -no-color \
+            -var="frontend_image=${{ steps.backend.outputs.registry }}/${PROJECT_NAME}-frontend:plan" \
+            -var="backend_image=${{ steps.backend.outputs.registry }}/${PROJECT_NAME}-backend:plan"

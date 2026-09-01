@@ -1,0 +1,68 @@
+{
+  "widgets": [
+    {
+      "type": "text",
+      "x": 0, "y": 0, "width": 24, "height": 1,
+      "properties": { "markdown": "## Application - request rate, error rate, latency, DB query performance\nNote: the app-level metrics below assume CloudWatch embedded metric format (EMF) or a metrics-to-CloudWatch bridge is wired up from the /metrics endpoint. See README 'Extending monitoring' section." }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 1, "width": 8, "height": 6,
+      "properties": {
+        "title": "Request Rate (req/min)",
+        "view": "timeSeries",
+        "metrics": [
+          ["TaskboardApi", "http_requests_total", "Environment", "production", { "stat": "Sum" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "metric",
+      "x": 8, "y": 1, "width": 8, "height": 6,
+      "properties": {
+        "title": "Error Rate (5xx responses)",
+        "view": "timeSeries",
+        "metrics": [
+          ["TaskboardApi", "http_requests_total", "Environment", "production", "status_code", "500", { "stat": "Sum", "color": "#d62728" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "metric",
+      "x": 16, "y": 1, "width": 8, "height": 6,
+      "properties": {
+        "title": "Request Latency p95 (seconds)",
+        "view": "timeSeries",
+        "metrics": [
+          ["TaskboardApi", "http_request_duration_seconds", "Environment", "production", { "stat": "p95" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "metric",
+      "x": 0, "y": 7, "width": 12, "height": 6,
+      "properties": {
+        "title": "RDS Read/Write Latency",
+        "view": "timeSeries",
+        "metrics": [
+          ["AWS/RDS", "ReadLatency", "DBInstanceIdentifier", "8bytes-demo-production-db", { "stat": "Average", "label": "Read" }],
+          ["AWS/RDS", "WriteLatency", "DBInstanceIdentifier", "8bytes-demo-production-db", { "stat": "Average", "label": "Write" }]
+        ],
+        "period": 60
+      }
+    },
+    {
+      "type": "log",
+      "x": 12, "y": 7, "width": 12, "height": 6,
+      "properties": {
+        "title": "Recent application errors",
+        "view": "table",
+        "region": "us-east-1",
+        "query": "SOURCE '/ecs/8bytes-demo-production-backend' | fields @timestamp, @message\n| filter @message like /error/\n| sort @timestamp desc\n| limit 20"
+      }
+    }
+  ]
+}
