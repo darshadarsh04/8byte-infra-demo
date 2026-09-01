@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Taskboard</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      max-width: 640px; margin: 0 auto; padding: 2rem 1.25rem; line-height: 1.5;
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+    .sub { color: #6b7280; margin-top: 0; font-size: 0.9rem; }
+    form { display: flex; gap: 0.5rem; margin: 1.5rem 0; }
+    input[type=text] { flex: 1; padding: 0.6rem 0.75rem; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; }
+    button { padding: 0.6rem 1rem; border: 0; border-radius: 8px; background: #4f46e5; color: #fff; font-size: 0.95rem; cursor: pointer; }
+    button:hover { background: #4338ca; }
+    ul { list-style: none; padding: 0; }
+    li { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0; border-bottom: 1px solid #e5e7eb; }
+    li.done span.title { text-decoration: line-through; color: #9ca3af; }
+    .title { flex: 1; }
+    .done-btn { background: #059669; padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+    .status { font-size: 0.85rem; color: #6b7280; min-height: 1.2rem; }
+    .err { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <h1>Taskboard</h1>
+  <p class="sub">A small three-tier demo app — this page (frontend) talks to the API (backend), which talks to Postgres (db).</p>
+
+  <form id="add-form">
+    <input type="text" id="title" placeholder="What needs doing?" autocomplete="off" required />
+    <button type="submit">Add</button>
+  </form>
+
+  <div class="status" id="status"></div>
+  <ul id="list"></ul>
+
+  <script>
+    // Same-origin: the ALB routes /api/* to the backend target group, so the
+    // browser never needs the backend's address and there is no CORS to deal with.
+    const API = '/api';
+    const listEl = document.getElementById('list');
+    const statusEl = document.getElementById('status');
+
+    function setStatus(msg, isErr) {
+      statusEl.textContent = msg || '';
+      statusEl.className = 'status' + (isErr ? ' err' : '');
+    }
+
+    async function load() {
+      try {
+        const res = await fetch(`${API}/tasks`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const tasks = await res.json();
+        render(tasks);
+        setStatus(tasks.length ? '' : 'No tasks yet - add one above.');
+      } catch (e) {
+        setStatus(`Could not reach the API: ${e.message}`, true);
+      }
+    }
+
+    function render(tasks) {
+      listEl.innerHTML = '';
+      for (const t of tasks) {
+        const li = document.createElement('li');
+        if (t.done) li.className = 'done';
+        const title = document.createElement('span');
+        title.className = 'title';
+        title.textContent = t.title;
+        li.appendChild(title);
+        if (!t.done) {
+          const btn = document.createElement('button');
+          btn.className = 'done-btn';
+          btn.textContent = 'Done';
+          btn.onclick = () => markDone(t.id);
+          li.appendChild(btn);
+        }
+        listEl.appendChild(li);
+      }
+    }
+
+    async function markDone(id) {
+      try {
+        const res = await fetch(`${API}/tasks/${id}/done`, { method: 'PATCH' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await load();
+      } catch (e) {
+        setStatus(`Update failed: ${e.message}`, true);
+      }
+    }
+
+    document.getElementById('add-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById('title');
+      const title = input.value.trim();
+      if (!title) return;
+      try {
+        const res = await fetch(`${API}/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        input.value = '';
+        await load();
+      } catch (e) {
+        setStatus(`Add failed: ${e.message}`, true);
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>
